@@ -17,7 +17,9 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::arrow::datatypes::{DataType, Schema};
-use crate::error::Result;
+use crate::datafusion::execution::physical_plan::common::get_scalar_value;
+use crate::datafusion::logicalplan::ScalarValue;
+use crate::error::{ballista_error, Result};
 use crate::execution::physical_plan::{
     Accumulator, AggregateExpr, AggregateMode, ColumnarBatch, ColumnarValue, Expression,
 };
@@ -52,6 +54,68 @@ impl AggregateExpr for Avg {
 
     fn create_accumulator(&self, _mode: &AggregateMode) -> Rc<RefCell<dyn Accumulator>> {
         unimplemented!()
+    }
+}
+
+macro_rules! avg_accumulate {
+    ($SELF:ident, $VALUE:expr, $ARRAY_TYPE:ident) => {{
+        match ($SELF.sum, $SELF.count) {
+            (Some(sum), Some(count)) => {
+                $SELF.sum = Some(sum + $VALUE as f64);
+                $SELF.count = Some(count + 1);
+            }
+            _ => {
+                $SELF.sum = Some($VALUE as f64);
+                $SELF.count = Some(1);
+            }
+        };
+    }};
+}
+struct AvgAccumulator {
+    sum: Option<f64>,
+    count: Option<i64>,
+}
+
+impl Accumulator for AvgAccumulator {
+    fn accumulate(&mut self, value: &ColumnarValue) -> Result<()> {
+        match value {
+            ColumnarValue::Columnar(array) => {
+                for row in 0..array.len() {
+                    self.accumulate(&ColumnarValue::Scalar(get_scalar_value(array, row)?, 1))?;
+                }
+            }
+            ColumnarValue::Scalar(value, _) => {
+                if let Some(value) = value {
+                    match value {
+                        ScalarValue::Int8(value) => avg_accumulate!(self, *value, Int8Array),
+                        ScalarValue::Int16(value) => avg_accumulate!(self, *value, Int16Array),
+                        ScalarValue::Int32(value) => avg_accumulate!(self, *value, Int32Array),
+                        ScalarValue::Int64(value) => avg_accumulate!(self, *value, Int64Array),
+                        ScalarValue::UInt8(value) => avg_accumulate!(self, *value, UInt8Array),
+                        ScalarValue::UInt16(value) => avg_accumulate!(self, *value, UInt16Array),
+                        ScalarValue::UInt32(value) => avg_accumulate!(self, *value, UInt32Array),
+                        ScalarValue::UInt64(value) => avg_accumulate!(self, *value, UInt64Array),
+                        ScalarValue::Float32(value) => avg_accumulate!(self, *value, Float32Array),
+                        ScalarValue::Float64(value) => avg_accumulate!(self, *value, Float64Array),
+                        other => {
+                            return Err(ballista_error(&format!(
+                                "AVG does not support {:?}",
+                                other
+                            )))
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn get_value(&self) -> Result<Option<ScalarValue>> {
+        match (self.sum, self.count) {
+            (Some(sum), Some(count)) => Ok(Some(ScalarValue::Float64(sum / count as f64))),
+            _ => Ok(None),
+        }
     }
 }
 
