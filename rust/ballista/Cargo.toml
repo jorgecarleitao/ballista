@@ -2,7 +2,7 @@
 name = "ballista"
 description = "Distributed compute platform based on Apache Arrow"
 license = "Apache-2.0"
-version = "0.3.0-SNAPSHOT"
+version = "0.4.0-SNAPSHOT"
 homepage = "https://github.com/ballista-compute/ballista"
 repository = "https://github.com/ballista-compute/ballista"
 authors = ["Andy Grove <andygrove73@gmail.com>"]
@@ -37,6 +37,12 @@ arrow = "1.0.0"
 arrow-flight = "1.0.0"
 datafusion = "1.0.0"
 parquet = "1.0.0"
+
+# Ballista 0.4.0-SNAPSHOT depends on latest Arrow
+#arrow = { git = "https://github.com/apache/arrow" }
+#arrow-flight = { git = "https://github.com/apache/arrow" }
+#datafusion = { git = "https://github.com/apache/arrow" }
+#parquet = { git = "https://github.com/apache/arrow" }
 
 [[bin]]
 name = "executor"
