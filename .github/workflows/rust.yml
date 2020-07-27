@@ -86,3 +86,19 @@ jobs:
     - name: Run tests
       run: |
         cd rust && cargo test
+
+  Docker:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    - name: Build and push image to GitHub Packages
+      uses: docker/build-push-action@v1
+      with:
+        username: ${{ GITHUB_ACTOR }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+        registry: docker.pkg.github.com
+        repository: ${{ GITHUB_REPOSITORY }}/ballista-rust
+        tag_with_ref: true
+        dockerfile: docker/rust.dockerfile
+        build_args: RELEASE_FLAG=
+        cache_froms: ${{ GITHUB_REPOSITORY }}/ballista-rust:main
