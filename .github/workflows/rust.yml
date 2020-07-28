@@ -87,7 +87,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v2
-    - name: Build and push image to GitHub Packages
+    - name: Build and push builder image
+      uses: docker/build-push-action@v1
+      with:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+        registry: docker.pkg.github.com
+        repository: ${{ github.repository }}/ballista-rust-builder
+        tag_with_ref: true
+        target: builder
+        dockerfile: docker/rust.dockerfile
+        build_args: RELEASE_FLAG=
+        cache_froms: ${{ github.repository }}/ballista-rust-builder:bla
+    - name: Build and push image
       uses: docker/build-push-action@v1
       with:
         username: ${{ github.actor }}
@@ -97,4 +109,4 @@ jobs:
         tag_with_ref: true
         dockerfile: docker/rust.dockerfile
         build_args: RELEASE_FLAG=
-        cache_froms: ${{ github.repository }}/ballista-rust:main
+        cache_froms: ${{ github.repository }}/ballista-rust:bla,${{ github.repository }}/ballista-rust-builder:bla
