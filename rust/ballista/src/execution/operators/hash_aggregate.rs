@@ -30,19 +30,21 @@ use crate::error::{ballista_error, BallistaError, Result};
 use crate::execution::physical_plan::{
     compile_aggregate_expressions, compile_expressions, Accumulator, AggregateExpr, AggregateMode,
     ColumnarBatch, ColumnarBatchIter, ColumnarBatchStream, ColumnarValue, Distribution,
-    ExecutionContext, ExecutionPlan, Expression, MaybeColumnarBatch, Partitioning, PhysicalPlan,
+    ExecutionContext, ExecutionPlan, Expression, MaybeColumnarBatch, Partitioning, PhysicalPlan, compile_expression, compile_aggregate_expression,
 };
 
 use async_trait::async_trait;
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use smol::Task;
 use std::collections::HashMap;
+use arrow::record_batch::RecordBatch;
 
 /// HashAggregateExec applies a hash aggregate operation against its input.
-#[allow(dead_code)]
 #[derive(Debug)]
 pub struct HashAggregateExec {
     pub(crate) mode: AggregateMode,
+    // these are logical expressions because physical expressions
+    // are not serializable due to their dynamic nature
     pub(crate) group_expr: Vec<Expr>,
     pub(crate) aggr_expr: Vec<Expr>,
     pub(crate) child: Arc<PhysicalPlan>,
@@ -59,20 +61,23 @@ impl HashAggregateExec {
         //TODO should just use schema from logical plan rather than derive it here?
 
         let input_schema = child.as_execution_plan().schema();
-        let compiled_group_expr = compile_expressions(&group_expr, &input_schema)?;
-        let compiled_aggr_expr = compile_aggregate_expressions(&aggr_expr, &input_schema)?;
 
-        let mut fields = compiled_group_expr
-            .iter()
-            .map(|e| e.to_schema_field(&input_schema))
-            .collect::<Result<Vec<_>>>()?;
-        fields.extend(
-            compiled_aggr_expr
-                .iter()
-                .map(|e| e.to_schema_field(&input_schema))
-                .collect::<Result<Vec<_>>>()?,
-        );
+        // compile the logical expressions along with their name
+        let physical_group_expr: Vec<(Arc<dyn Expression>, String)> = group_expr.iter().map(|expr| {
+            Ok((compile_expression(expr, &child.as_execution_plan().schema())?, expr.name(&input_schema)?.clone()))
+        }).collect::<Result<Vec<_>>>()?;
+        let physical_aggr_expr: Vec<(Arc<dyn AggregateExpr>, String)> = aggr_expr.iter().map(|expr| {
+            Ok((compile_aggregate_expression(expr, &child.as_execution_plan().schema())?, expr.name(&input_schema)?.clone()))
+        }).collect::<Result<Vec<_>>>()?;
 
+        // build the output schema based on the physical expressions
+        let mut fields = Vec::with_capacity(physical_group_expr.len() + physical_aggr_expr.len());
+        for (expr, name) in &physical_group_expr {
+            fields.push(Field::new(name, expr.data_type(&input_schema)?, expr.nullable(&input_schema)?));
+        }
+        for (expr, name) in &physical_aggr_expr {
+            fields.push(Field::new(name, expr.data_type(&input_schema)?, expr.nullable(&input_schema)?));
+        }
         let schema = Arc::new(Schema::new(fields));
 
         Ok(Self {
@@ -128,29 +133,26 @@ impl ExecutionPlan for HashAggregateExec {
         let child_exec = self.child.as_execution_plan();
         let input_schema = child_exec.schema();
         let input = child_exec.execute(ctx.clone(), partition_index).await?;
+
         let group_expr = compile_expressions(&self.group_expr, &input_schema)?;
         let aggr_expr = compile_aggregate_expressions(&self.aggr_expr, &input_schema)?;
-        let a: Vec<Field> = group_expr
-            .iter()
-            .map(|e| e.to_schema_field(&input_schema))
-            .collect::<Result<_>>()?;
-        let b: Vec<Field> = aggr_expr
-            .iter()
-            .map(|e| e.to_schema_field(&input_schema))
-            .collect::<Result<_>>()?;
-        let mut fields = vec![];
-        for field in &a {
-            fields.push(field.clone());
+
+        let mut fields = Vec::with_capacity(group_expr.len() + aggr_expr.len());
+        for (i, expr) in group_expr.iter().enumerate() {
+            fields.push(Field::new(&self.group_expr[i].name(&input_schema)?, expr.data_type(&input_schema)?, expr.nullable(&input_schema)?))
         }
-        for field in &b {
-            fields.push(field.clone());
+        for (i, expr) in aggr_expr.iter().enumerate() {
+            fields.push(Field::new(&self.aggr_expr[i].name(&input_schema)?, expr.data_type(&input_schema)?, expr.nullable(&input_schema)?))
         }
+        let output_schema = Arc::new(Schema::new(fields));
+
         Ok(Arc::new(HashAggregateIter::new(
             &self.mode,
             input,
             group_expr,
             aggr_expr,
-            Arc::new(Schema::new(fields)),
+            input_schema,
+            output_schema,
         )))
     }
 }
@@ -241,13 +243,15 @@ fn run(
     input: ColumnarBatchStream,
     group_expr: Vec<Arc<dyn Expression>>,
     aggr_expr: Vec<Arc<dyn AggregateExpr>>,
+    input_schema: &Schema,
+    output_schema: &Schema,
 ) -> Result<()> {
     smol::run(async {
         // metrics
         let start = Instant::now();
         let mut read_batch_time = 0;
         let mut accum_batch_time = 0;
-        let mut batch_count = 0;
+        let mut batch_count: i32 = 0;
         let mut row_count = 0;
 
         // hash map of grouping values to accumulators
@@ -322,9 +326,10 @@ fn run(
         let prepare_final_batch_start = Instant::now();
         let batch = create_batch_from_accum_map(
             &map,
-            input.as_ref().schema().as_ref(),
             &group_expr,
             &aggr_expr,
+            &input_schema,
+            &output_schema,
         )?;
         let create_final_batch_time = prepare_final_batch_start.elapsed().as_millis();
 
@@ -466,13 +471,16 @@ impl HashAggregateIter {
         input: ColumnarBatchStream,
         group_expr: Vec<Arc<dyn Expression>>,
         aggr_expr: Vec<Arc<dyn AggregateExpr>>,
+        input_schema: Arc<Schema>,
         output_schema: Arc<Schema>,
     ) -> Self {
         let (tx, rx): (Sender<MaybeColumnarBatch>, Receiver<MaybeColumnarBatch>) = unbounded();
 
+        let move_input_schema = input_schema.clone();
+        let move_output_schema = output_schema.clone();
         let mode = mode.clone();
         let _ = std::thread::spawn(move || {
-            run(tx, &mode, input, group_expr, aggr_expr).unwrap();
+            run(tx, &mode, input, group_expr, aggr_expr, &move_input_schema, &move_output_schema).unwrap();
         });
 
         Self {
@@ -543,9 +551,10 @@ fn create_key(
 /// Create a columnar batch from the hash map
 fn create_batch_from_accum_map(
     map: &HashMap<Vec<GroupByScalar>, AccumulatorSet>,
-    input_schema: &Schema,
     group_expr: &[Arc<dyn Expression>],
     aggr_expr: &[Arc<dyn AggregateExpr>],
+    input_schema: &Schema,
+    output_schema: &Schema,
 ) -> Result<ColumnarBatch> {
     // build the result arrays
     let mut arrays: Vec<ArrayRef> = Vec::with_capacity(group_expr.len() + aggr_expr.len());
@@ -604,20 +613,11 @@ fn create_batch_from_accum_map(
         arrays.push(array?);
     }
 
-    let values: Vec<ColumnarValue> = arrays
-        .iter()
-        .map(|a| ColumnarValue::Columnar(a.clone()))
-        .collect();
-
-    Ok(ColumnarBatch::from_values(&values))
+    Ok(ColumnarBatch::from_arrow(&RecordBatch::try_new(Arc::new(output_schema.clone()), arrays)?))
 }
 
 #[async_trait]
 impl ColumnarBatchIter for HashAggregateIter {
-    fn schema(&self) -> Arc<Schema> {
-        self.schema.clone()
-    }
-
     async fn next(&self) -> Result<Option<ColumnarBatch>> {
         let channel = self.rx.clone();
         Task::blocking(async move {
