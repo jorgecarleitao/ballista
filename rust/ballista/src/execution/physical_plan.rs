@@ -20,7 +20,7 @@
 //! (e.g. SortMergeJoin versus BroadcastHashJoin) whereas the logical plan just deals with an
 //! abstract concept of a join.
 //!
-//! The physical plan also accounts for partitioning and ordering of data between operators.
+//! The physical plan also accounts for partitioning and ordering of data between operators. 1
 
 use std::fmt::{self, Debug};
 use std::sync::Arc;
