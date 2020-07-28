@@ -39,12 +39,6 @@ arrow-flight = { git = "https://github.com/apache/arrow" }
 datafusion = { git = "https://github.com/apache/arrow" }
 parquet = { git = "https://github.com/apache/arrow" }
 
-# Ballista 0.4.0-SNAPSHOT depends on latest Arrow
-#arrow = { git = "https://github.com/apache/arrow" }
-#arrow-flight = { git = "https://github.com/apache/arrow" }
-#datafusion = { git = "https://github.com/apache/arrow" }
-#parquet = { git = "https://github.com/apache/arrow" }
-
 [[bin]]
 name = "executor"
 path = "src/bin/executor.rs"
