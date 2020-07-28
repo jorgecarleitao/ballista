@@ -90,11 +90,11 @@ jobs:
     - name: Build and push image to GitHub Packages
       uses: docker/build-push-action@v1
       with:
-        username: ${{ GITHUB_ACTOR }}
+        username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
         registry: docker.pkg.github.com
-        repository: ${{ GITHUB_REPOSITORY }}/ballista-rust
+        repository: ${{ github.repository }}/ballista-rust
         tag_with_ref: true
         dockerfile: docker/rust.dockerfile
         build_args: RELEASE_FLAG=
-        cache_froms: ${{ GITHUB_REPOSITORY }}/ballista-rust:main
+        cache_froms: ${{ github.repository }}/ballista-rust:main
