@@ -25,7 +25,7 @@ use crate::datafusion::datasource::TableProvider;
 use crate::datafusion::logicalplan::{Operator, exprlist_to_fields};
 use crate::datafusion::logicalplan::ScalarValue;
 use crate::datafusion::logicalplan::{Expr, FunctionMeta, LogicalPlan, LogicalPlanBuilder};
-use crate::datafusion::sql::parser::{DFASTNode, DFParser};
+use crate::datafusion::sql::parser::{Statement, DFParser};
 use crate::datafusion::sql::planner::{SchemaProvider, SqlToRel};
 use crate::distributed::client;
 use crate::error::{BallistaError, Result};
@@ -219,14 +219,21 @@ impl Context {
     }
 
     pub fn sql(&self, sql: &str) -> Result<DataFrame> {
-        let ast = DFParser::parse_sql(sql)?;
-        match ast {
-            DFASTNode::ANSI(ansi) => {
+        let statements = DFParser::parse_sql(sql)?;
+
+        if statements.len() != 1 {
+            return Err(BallistaError::NotImplemented(format!(
+                "The dataframe currently only supports a single SQL statement",
+            )));
+        }
+
+        match &statements[0] {
+            Statement::Statement(ansi) => {
                 let plan = SqlToRel::new(&*self.state.schema_provider.read().unwrap())
-                    .sql_to_rel(&ansi)?;
+                    .statement_to_plan(&ansi)?;
                 Ok(DataFrame::from(self.state.clone(), plan))
             }
-            DFASTNode::CreateExternalTable { .. } => {
+            Statement::CreateExternalTable { .. } => {
                 unimplemented!("TODO");
             }
         }
