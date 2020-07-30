@@ -32,7 +32,7 @@ impl Literal {
 
 impl Expression for Literal {
     fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
-        Ok(self.value.get_datatype())
+        Ok(self.value.get_datatype()?)
     }
 
     fn nullable(&self, _input_schema: &Schema) -> Result<bool> {
