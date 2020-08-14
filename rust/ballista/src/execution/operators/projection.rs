@@ -58,7 +58,7 @@ impl ProjectionExec {
         let schema = Arc::new(Schema::new(fields?));
 
         Ok(Self {
-            exprs: exprs.iter().cloned().collect::<Vec<_>>(),
+            exprs: exprs.to_vec(),
             child,
             schema,
         })
