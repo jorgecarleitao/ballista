@@ -69,7 +69,7 @@ impl HashAggregateExec {
             .map(|expr| {
                 Ok((
                     compile_expression(expr, &child.as_execution_plan().schema())?,
-                    expr.name(&input_schema)?.clone(),
+                    expr.name(&input_schema)?,
                 ))
             })
             .collect::<Result<Vec<_>>>()?;
@@ -78,7 +78,7 @@ impl HashAggregateExec {
             .map(|expr| {
                 Ok((
                     compile_aggregate_expression(expr, &child.as_execution_plan().schema())?,
-                    expr.name(&input_schema)?.clone(),
+                    expr.name(&input_schema)?,
                 ))
             })
             .collect::<Result<Vec<_>>>()?;
